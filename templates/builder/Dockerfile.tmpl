@@ -1,0 +1,6 @@
+FROM temporalio/auto-setup:1.25.2
+
+ENV DB=postgres12_pgx
+ENV SKIP_DB_CREATE=false
+
+EXPOSE 7233 8233

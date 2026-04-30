@@ -1,0 +1,7 @@
+## Getting Started with Temporal
+
+This service runs an embedded Temporal server. It requires an postgres dependency for persistence.
+
+1. Add a `postgres` service as a dependency
+2. The Temporal agent will automatically create `temporal` and `temporal_visibility` databases
+3. Schema migrations run automatically on startup

@@ -1,0 +1,5 @@
+name: temporal-test
+layout: flat
+services:
+    - name: postgres
+    - name: temporal
