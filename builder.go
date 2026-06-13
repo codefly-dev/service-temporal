@@ -30,7 +30,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
-		return nil, err
+		return s.Builder.LoadError(err)
 	}
 
 	requirements.Localize(s.Location)

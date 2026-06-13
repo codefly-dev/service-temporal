@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
@@ -467,6 +468,8 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 }
 
 func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*runtimev0.DestroyResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
 	if s.temporalServer != nil {
 		s.temporalServer.Stop()
 		s.temporalServer = nil
@@ -588,12 +591,22 @@ func (s *Runtime) ensureDefaultNamespace(ctx context.Context) error {
 
 // allocatedPorts tracks ports already handed out by getFreePort to avoid
 // TOCTOU races where multiple calls return the same port before Temporal binds.
-var allocatedPorts = make(map[int]bool)
+// allocatedPortsMu guards it — Init allocates several internal ports and the
+// map was read+written with no synchronization, a data race under -race and a
+// real duplicate-port risk if allocations ever run concurrently.
+var (
+	allocatedPorts   = make(map[int]bool)
+	allocatedPortsMu sync.Mutex
+)
 
 // getFreePort returns a free TCP port on localhost in the low range (< 32768).
 // Temporal stores RPC ports as SMALLINT in PostgreSQL, which has a max of 32767.
 // Each call returns a unique port not previously returned in this process.
 func getFreePort() int {
+	// Hold the lock across the whole scan so the check-and-reserve is atomic;
+	// getFreePort is called a handful of times at Init, not on a hot path.
+	allocatedPortsMu.Lock()
+	defer allocatedPortsMu.Unlock()
 	// Start at 11000 to avoid colliding with codefly's REST server (10001)
 	// and other services commonly using the 10000 range.
 	for port := 11000; port < 32000; port++ {
