@@ -2,6 +2,8 @@ module github.com/codefly-dev/service-temporal
 
 go 1.25.8
 
+toolchain go1.26.4
+
 require (
 	github.com/codefly-dev/core v0.1.164
 	github.com/lib/pq v1.12.3
