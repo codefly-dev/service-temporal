@@ -5,7 +5,7 @@ go 1.25.8
 toolchain go1.26.4
 
 require (
-	github.com/codefly-dev/core v0.2.5
+	github.com/codefly-dev/core v0.2.8
 	github.com/lib/pq v1.12.3
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.7
