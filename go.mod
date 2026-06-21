@@ -5,7 +5,7 @@ go 1.25.8
 toolchain go1.26.4
 
 require (
-	github.com/codefly-dev/core v0.2.2
+	github.com/codefly-dev/core v0.2.5
 	github.com/lib/pq v1.12.3
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.7
@@ -184,6 +184,7 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.275.0 // indirect
