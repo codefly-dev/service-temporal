@@ -98,8 +98,8 @@ github.com/cloudflare/circl v1.6.3 h1:9GPOhQGF9MCYUeXyMYlqTR6a5gTrgR/fBLXvUgtVcg
 github.com/cloudflare/circl v1.6.3/go.mod h1:2eXP6Qfat4O/Yhh8BznvKnJ+uzEoTQ6jVKJRn81BiS4=
 github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 h1:aBangftG7EVZoUb69Os8IaYg++6uMOdKK83QtkkvJik=
 github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2/go.mod h1:qwXFYgsP6T7XnJtbKlf1HP8AjxZZyzxMmc+Lq5GjlU4=
-github.com/codefly-dev/core v0.2.10 h1:hExMaYgq4ebP5IcX1NifMuNtTIujM95VvTBd3jqV184=
-github.com/codefly-dev/core v0.2.10/go.mod h1:KDqWWUbN2BwqA4tqeo4k0vLOjUBGINxybTqwvXX7kPA=
+github.com/codefly-dev/core v0.2.11 h1:EZZscZPW1VSIvoQzekMUH/epNgyl7AkA19I2UbciRnE=
+github.com/codefly-dev/core v0.2.11/go.mod h1:17JyLS7Ni2GsOXSzl5pL6I8++GFogzRMDynle4+2uEs=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/crossdock/crossdock-go v0.0.0-20160816171116-049aabb0122b/go.mod h1:v9FBN7gdVTpiD/+LZ7Po0UKvROyT87uLVxTHVky/dlQ=
 github.com/cyphar/filepath-securejoin v0.6.1 h1:5CeZ1jPXEiYt3+Z6zqprSAgSWiggmpVyciv8syjIpVE=
