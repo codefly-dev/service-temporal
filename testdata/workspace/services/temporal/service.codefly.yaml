@@ -1,0 +1,14 @@
+name: temporal
+version: 0.0.0
+agent:
+    kind: codefly:service
+    name: temporal
+    version: 0.0.7
+    publisher: codefly.dev
+service-dependencies:
+    - name: postgres
+endpoints:
+    - name: grpc
+      api: tcp
+    - name: http
+      api: tcp

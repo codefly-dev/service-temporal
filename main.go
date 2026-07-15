@@ -13,7 +13,9 @@ import (
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/services"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/resources"
+	runnersbase "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/shared"
 )
 
@@ -46,16 +48,14 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	return &agentv0.AgentInformation{
-		RuntimeRequirements: []*agentv0.Runtime{
-			{Type: agentv0.Runtime_GO},
+	return services.Advertisement{
+		Backends: runnersbase.BackendSupport{
+			Local:  func() bool { return languages.HasGoRuntime(nil) },
+			Nix:    false,
+			Docker: true,
 		},
-		Capabilities: []*agentv0.Capability{
-			{Type: agentv0.Capability_BUILDER},
-			{Type: agentv0.Capability_RUNTIME},
-		},
-		Protocols: []*agentv0.Protocol{},
-		ConfigurationDetails: []*agentv0.ConfigurationValueDetail{
+		Toolchains: []agentv0.Toolchain_Type{agentv0.Toolchain_GO},
+		Config: []*agentv0.ConfigurationValueDetail{
 			{
 				Name: "connection", Description: "Temporal connection details",
 				Fields: []*agentv0.ConfigurationValueInformation{
@@ -65,7 +65,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 			},
 		},
 		ReadMe: readme,
-	}, nil
+	}.Build(), nil
 }
 
 func NewService() *Service {
