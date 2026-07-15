@@ -15,38 +15,18 @@ spec:
     spec:
       containers:
         - name: temporal
-          image: temporalio/auto-setup:1.25.2
+          image: {{ .Image }}
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 7233
               name: grpc
             - containerPort: 8233
               name: http
-          env:
-            - name: DB
-              value: "postgres12_pgx"
-            - name: SKIP_DB_CREATE
-              value: "false"
-            - name: POSTGRES_SEEDS
-              valueFrom:
-                secretKeyRef:
-                  name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
-                  key: POSTGRES_SEEDS
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
-                  key: POSTGRES_USER
-            - name: POSTGRES_PWD
-              valueFrom:
-                secretKeyRef:
-                  name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
-                  key: POSTGRES_PWD
-            - name: DBNAME
-              value: "temporal"
-            - name: VISIBILITY_DBNAME
-              value: "temporal_visibility"
-            - name: DEFAULT_NAMESPACE
-              value: "default"
+          envFrom:
+            - configMapRef:
+                name: "temporal-{{ .Service.Name.DNSCase }}-config"
+            - secretRef:
+                name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
           resources:
             requests:
               memory: "512Mi"

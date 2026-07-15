@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -57,37 +58,24 @@ func NewRuntime() *Runtime {
 
 func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
 	defer s.Wool.Catch()
-	ctx = s.Wool.Inject(ctx)
 
-	err := s.Base.Load(ctx, req.Identity, s.Settings)
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "loading base")
-	}
-
-	if req.DisableCatch {
-		s.Wool.DisableCatch()
-	}
-
-	s.Runtime.SetEnvironment(req.Environment)
-
-	requirements.Localize(s.Location)
-
-	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "loading endpoints")
-	}
-
-	s.grpcEndpoint, err = resources.FindTCPEndpointWithName(ctx, "grpc", s.Endpoints)
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "finding grpc endpoint")
-	}
-
-	s.httpEndpoint, err = resources.FindTCPEndpointWithName(ctx, "http", s.Endpoints)
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "finding http endpoint")
-	}
-
-	return s.Runtime.LoadResponse()
+	return s.Runtime.LoadService(ctx, req, services.RuntimeLoad{
+		Settings:     s.Settings,
+		Requirements: requirements,
+		ResolveEndpoints: func(ctx context.Context, endpoints []*basev0.Endpoint) error {
+			grpcEndpoint, err := resources.FindTCPEndpointWithName(ctx, "grpc", endpoints)
+			if err != nil {
+				return s.Wool.Wrapf(err, "finding grpc endpoint")
+			}
+			httpEndpoint, err := resources.FindTCPEndpointWithName(ctx, "http", endpoints)
+			if err != nil {
+				return s.Wool.Wrapf(err, "finding http endpoint")
+			}
+			s.grpcEndpoint = grpcEndpoint
+			s.httpEndpoint = httpEndpoint
+			return nil
+		},
+	})
 }
 
 func (s *Runtime) CreateConnectionConfigurationInformation(_ context.Context, endpoint *basev0.Endpoint, instance *basev0.NetworkInstance) *basev0.ConfigurationInformation {
@@ -265,10 +253,10 @@ func (s *Runtime) startTemporalServer(ctx context.Context) error {
 	sqlConnectAddr := fmt.Sprintf("%s:%d", s.postgresHost, s.postgresPort)
 
 	defaultStoreConfig := config.SQL{
-		PluginName:  postgresql.PluginName,
-		ConnectAddr: sqlConnectAddr,
-		User:        s.postgresUser,
-		Password:    s.postgresPassword,
+		PluginName:   postgresql.PluginName,
+		ConnectAddr:  sqlConnectAddr,
+		User:         s.postgresUser,
+		Password:     s.postgresPassword,
 		DatabaseName: "temporal",
 		ConnectAttributes: map[string]string{
 			"sslmode": "disable",
@@ -277,10 +265,10 @@ func (s *Runtime) startTemporalServer(ctx context.Context) error {
 	}
 
 	visibilityStoreConfig := config.SQL{
-		PluginName:  postgresql.PluginName,
-		ConnectAddr: sqlConnectAddr,
-		User:        s.postgresUser,
-		Password:    s.postgresPassword,
+		PluginName:   postgresql.PluginName,
+		ConnectAddr:  sqlConnectAddr,
+		User:         s.postgresUser,
+		Password:     s.postgresPassword,
 		DatabaseName: "temporal_visibility",
 		ConnectAttributes: map[string]string{
 			"sslmode": "disable",
@@ -485,72 +473,29 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 // PostgreSQL connection string of the form:
 // postgresql://user:password@host:port/dbname?sslmode=disable
 func parsePostgresConnectionString(connStr string) (host string, port int, user, password string, err error) {
-	// Strip the scheme
-	rest := connStr
-	for _, prefix := range []string{"postgresql://", "postgres://"} {
-		if len(connStr) > len(prefix) && connStr[:len(prefix)] == prefix {
-			rest = connStr[len(prefix):]
-			break
+	parsed, err := url.Parse(connStr)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("parse postgres connection string: %w", err)
+	}
+	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+		return "", 0, "", "", fmt.Errorf("unsupported postgres connection scheme %q", parsed.Scheme)
+	}
+	if parsed.User == nil {
+		return "", 0, "", "", fmt.Errorf("postgres connection string has no user information")
+	}
+	host = parsed.Hostname()
+	if host == "" {
+		return "", 0, "", "", fmt.Errorf("postgres connection string has no host")
+	}
+	port = 5432
+	if rawPort := parsed.Port(); rawPort != "" {
+		port, err = strconv.Atoi(rawPort)
+		if err != nil || port < 1 || port > 65535 {
+			return "", 0, "", "", fmt.Errorf("invalid postgres port %q", rawPort)
 		}
 	}
-
-	// Split user:pass@host:port/db
-	atIdx := -1
-	for i, c := range rest {
-		if c == '@' {
-			atIdx = i
-			break
-		}
-	}
-	if atIdx < 0 {
-		return "", 0, "", "", fmt.Errorf("cannot parse postgres connection string: no @ found")
-	}
-
-	userPass := rest[:atIdx]
-	hostRest := rest[atIdx+1:]
-
-	// Parse user:password
-	colonIdx := -1
-	for i, c := range userPass {
-		if c == ':' {
-			colonIdx = i
-			break
-		}
-	}
-	if colonIdx < 0 {
-		user = userPass
-		password = ""
-	} else {
-		user = userPass[:colonIdx]
-		password = userPass[colonIdx+1:]
-	}
-
-	// Parse host:port (strip /db and query params)
-	slashIdx := -1
-	for i, c := range hostRest {
-		if c == '/' {
-			slashIdx = i
-			break
-		}
-	}
-	hostPort := hostRest
-	if slashIdx >= 0 {
-		hostPort = hostRest[:slashIdx]
-	}
-
-	h, p, splitErr := net.SplitHostPort(hostPort)
-	if splitErr != nil {
-		// No port specified, default to 5432
-		host = hostPort
-		port = 5432
-	} else {
-		host = h
-		port, _ = strconv.Atoi(p)
-		if port == 0 {
-			port = 5432
-		}
-	}
-
+	user = parsed.User.Username()
+	password, _ = parsed.User.Password()
 	return host, port, user, password, nil
 }
 

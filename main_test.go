@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codefly-dev/core/sdk"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/resources"
+	"github.com/codefly-dev/core/sdk"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/wool"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +44,14 @@ func TestParsePostgresConnectionString(t *testing.T) {
 			wantPort: 5432,
 			wantUser: "myuser",
 			wantPass: "mypass",
+		},
+		{
+			name:     "escaped credentials and ipv6",
+			connStr:  "postgresql://my%40user:p%3A%40ss@[::1]:6432/mydb",
+			wantHost: "::1",
+			wantPort: 6432,
+			wantUser: "my@user",
+			wantPass: "p:@ss",
 		},
 		{
 			name:    "missing @ sign",

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "temporal-{{ .Service.Name.DNSCase }}-config"
+  namespace: {{ .Namespace }}
+data:
+{{- range $key, $value := .ConfigMap }}
+  {{ $key }}: "{{ $value }}"
+{{- end }}

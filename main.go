@@ -30,6 +30,12 @@ type Settings struct {
 	Watch bool `yaml:"watch"`
 }
 
+var image = &resources.DockerImage{
+	Name:   "temporalio/auto-setup",
+	Tag:    "1.29.1",
+	Digest: "sha256:5b3502a3b685f9eff1b925af90c57c9e3dbeccbef367cc28a2a9712c63379312",
+}
+
 type Service struct {
 	*services.Base
 

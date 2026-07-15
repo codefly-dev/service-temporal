@@ -3,63 +3,49 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 
 	"github.com/codefly-dev/core/agents/services"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/codefly-dev/core/resources"
-	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
-	"github.com/codefly-dev/core/templates"
 )
 
 type Builder struct {
-	services.BuilderServer
+	*services.DefaultBuilder
 	*Service
 }
 
 func NewBuilder() *Builder {
+	service := NewService()
 	return &Builder{
-		Service: NewService(),
+		DefaultBuilder: services.NewDefaultBuilder(service.Builder),
+		Service:        service,
 	}
 }
 
 func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builderv0.LoadResponse, error) {
 	defer s.Wool.Catch()
-	ctx = s.Wool.Inject(ctx)
 
-	err := s.Base.Load(ctx, req.Identity, s.Settings)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
-
-	requirements.Localize(s.Location)
-
-	if req.CreationMode != nil {
-		s.Builder.CreationMode = req.CreationMode
-		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
-		if err != nil {
-			return s.Builder.LoadError(err)
-		}
-		return s.Builder.LoadResponse()
-	}
-
-	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
-
-	s.grpcEndpoint, err = resources.FindTCPEndpointWithName(ctx, "grpc", s.Endpoints)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
-
-	s.httpEndpoint, err = resources.FindTCPEndpointWithName(ctx, "http", s.Endpoints)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
-
-	return s.Builder.LoadResponse()
+	return s.Builder.LoadService(ctx, req, services.BuilderLoad{
+		Settings:         s.Settings,
+		Requirements:     requirements,
+		FactoryTemplates: factoryFS,
+		ResolveEndpoints: func(ctx context.Context, endpoints []*basev0.Endpoint) error {
+			grpcEndpoint, err := resources.FindTCPEndpointWithName(ctx, "grpc", endpoints)
+			if err != nil {
+				return err
+			}
+			httpEndpoint, err := resources.FindTCPEndpointWithName(ctx, "http", endpoints)
+			if err != nil {
+				return err
+			}
+			s.grpcEndpoint = grpcEndpoint
+			s.httpEndpoint = httpEndpoint
+			return nil
+		},
+	})
 }
 
 func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builderv0.InitResponse, error) {
@@ -73,62 +59,49 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	return s.Builder.InitResponse()
 }
 
-func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*builderv0.UpdateResponse, error) {
-	defer s.Wool.Catch()
-	return &builderv0.UpdateResponse{}, nil
-}
-
-func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builderv0.SyncResponse, error) {
-	defer s.Wool.Catch()
-	ctx = s.Wool.Inject(ctx)
-	return s.Builder.SyncResponse()
-}
-
-func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
-	return s.Builder.BuildResponse()
-}
-
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+	s.Base.SetDockerImage(image)
 
-	var k *builderv0.KubernetesDeployment
-	var err error
-	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	// Add dependency configurations
-	err = s.EnvironmentVariables.AddConfigurations(ctx, req.DependenciesConfigurations...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	configs, err := s.EnvironmentVariables.Configurations()
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-	cm, err := services.EnvsAsConfigMapData(configs...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	secrets, err := services.EnvsAsSecretData(s.EnvironmentVariables.Secrets()...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	params := services.DeploymentParameters{
-		ConfigMap: cm,
-		SecretMap: secrets,
-	}
-
-	err = s.Builder.KustomizeDeploy(ctx, req.Environment, k, deploymentFS, params)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	return s.Builder.DeployResponse()
+	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
+		EnvironmentVariables: s.EnvironmentVariables,
+		Templates:            deploymentFS,
+		Prepare: func(_ context.Context, deployment *services.KustomizeDeploymentContext) error {
+			var connection string
+			for _, configuration := range req.GetDependenciesConfigurations() {
+				value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "connection")
+				if err != nil {
+					return err
+				}
+				if value != "" {
+					connection = value
+					break
+				}
+			}
+			if connection == "" {
+				return fmt.Errorf("temporal requires a postgres dependency configuration")
+			}
+			host, port, user, password, err := parsePostgresConnectionString(connection)
+			if err != nil {
+				return err
+			}
+			deployment.AddConfigMap(
+				resources.Env("DB", "postgres12_pgx"),
+				resources.Env("SKIP_DB_CREATE", false),
+				resources.Env("POSTGRES_SEEDS", host),
+				resources.Env("DB_PORT", port),
+				resources.Env("DBNAME", "temporal"),
+				resources.Env("VISIBILITY_DBNAME", "temporal_visibility"),
+				resources.Env("DEFAULT_NAMESPACE", "default"),
+			)
+			deployment.AddSecrets(
+				resources.Env("POSTGRES_USER", user),
+				resources.Env("POSTGRES_PWD", password),
+			)
+			return nil
+		},
+	})
 }
 
 func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {
@@ -177,9 +150,6 @@ func (s *Builder) CreateEndpoints(ctx context.Context) error {
 
 //go:embed templates/factory
 var factoryFS embed.FS
-
-//go:embed templates/builder
-var builderFS embed.FS
 
 //go:embed templates/deployment
 var deploymentFS embed.FS
