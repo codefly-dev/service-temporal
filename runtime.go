@@ -110,7 +110,7 @@ func (s *Runtime) resolvePostgresFromDependencies(confs []*basev0.Configuration)
 		for _, info := range conf.Infos {
 			if info.Name == "postgres" {
 				for _, cv := range info.ConfigurationValues {
-					if cv.Key == "connection" {
+					if cv.Key == "owner-connection" {
 						host, port, user, pass, err := parsePostgresConnectionString(cv.Value)
 						if err != nil {
 							return fmt.Errorf("cannot parse postgres connection string: %w", err)
@@ -126,7 +126,7 @@ func (s *Runtime) resolvePostgresFromDependencies(confs []*basev0.Configuration)
 			}
 		}
 	}
-	return fmt.Errorf("no postgres dependency configuration found: add a postgres service as a dependency")
+	return fmt.Errorf("no postgres owner-connection migration capability found: add a postgres service as a dependency")
 }
 
 // ensureDatabase creates a database if it does not already exist.

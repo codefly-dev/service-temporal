@@ -59,6 +59,18 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	return s.Builder.InitResponse()
 }
 
+func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*builderv0.AuditResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	return s.Builder.AuditContainer(ctx, req, image.FullName())
+}
+
+func (s *Builder) SBOM(ctx context.Context, _ *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	return s.Builder.SBOMContainer(ctx, image.FullName())
+}
+
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
@@ -70,7 +82,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		Prepare: func(_ context.Context, deployment *services.KustomizeDeploymentContext) error {
 			var connection string
 			for _, configuration := range req.GetDependenciesConfigurations() {
-				value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "connection")
+				value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "owner-connection")
 				if err != nil {
 					return err
 				}
@@ -80,7 +92,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 				}
 			}
 			if connection == "" {
-				return fmt.Errorf("temporal requires a postgres dependency configuration")
+				return fmt.Errorf("temporal requires the postgres owner-connection migration capability")
 			}
 			host, port, user, password, err := parsePostgresConnectionString(connection)
 			if err != nil {

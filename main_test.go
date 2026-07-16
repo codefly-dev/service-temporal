@@ -99,7 +99,7 @@ func TestTemporalFullStack(t *testing.T) {
 	defer func() { _ = deps.Destroy(ctx) }()
 
 	// Get the postgres connection using the resources helper (not hardcoded env vars)
-	pgEnvKey := resources.ServiceSecretConfigurationKeyFromUnique("temporal-test/postgres", "postgres", "connection")
+	pgEnvKey := resources.ServiceSecretConfigurationKeyFromUnique("temporal-test/postgres", "postgres", "owner-connection")
 	pgConn := os.Getenv(pgEnvKey)
 	require.NotEmpty(t, pgConn, "postgres connection must be injected by codefly (env key: %s)", pgEnvKey)
 	t.Logf("Postgres: %s", pgConn)
@@ -156,7 +156,7 @@ func TestTemporalFullStack(t *testing.T) {
 		Infos: []*basev0.ConfigurationInformation{{
 			Name: "postgres",
 			ConfigurationValues: []*basev0.ConfigurationValue{
-				{Key: "connection", Value: pgConn, Secret: true},
+				{Key: "owner-connection", Value: pgConn, Secret: true},
 			},
 		}},
 	}}
