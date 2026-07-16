@@ -5,7 +5,7 @@ go 1.25.8
 toolchain go1.26.4
 
 require (
-	github.com/codefly-dev/core v0.2.18
+	github.com/codefly-dev/core v0.2.19
 	github.com/lib/pq v1.12.3
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.7
@@ -138,6 +138,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect

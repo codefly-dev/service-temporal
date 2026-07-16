@@ -3,7 +3,7 @@ version: 0.0.0
 agent:
     kind: codefly:service
     name: temporal
-    version: 0.0.7
+    version: 0.0.9
     publisher: codefly.dev
 service-dependencies:
     - name: postgres
