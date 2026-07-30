@@ -80,6 +80,20 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
 		Prepare: func(_ context.Context, deployment *services.KustomizeDeploymentContext) error {
+			deployment.AddConfigMap(
+				resources.Env("DB", "postgres12_pgx"),
+				resources.Env("SKIP_DB_CREATE", false),
+				resources.Env("DBNAME", "temporal"),
+				resources.Env("VISIBILITY_DBNAME", "temporal_visibility"),
+				resources.Env("DEFAULT_NAMESPACE", "default"),
+			)
+			// The restricted profile forbids receiving or serializing secret
+			// values: POSTGRES_USER and POSTGRES_PWD are consumed from
+			// externally-managed Secret references carried in the request, and
+			// the Postgres host and port arrive as non-secret configuration.
+			if services.IsRestrictedOutputProfile(deployment.Profile) {
+				return nil
+			}
 			var connection string
 			for _, configuration := range req.GetDependenciesConfigurations() {
 				value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "owner-connection")
@@ -99,13 +113,8 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 				return err
 			}
 			deployment.AddConfigMap(
-				resources.Env("DB", "postgres12_pgx"),
-				resources.Env("SKIP_DB_CREATE", false),
 				resources.Env("POSTGRES_SEEDS", host),
 				resources.Env("DB_PORT", port),
-				resources.Env("DBNAME", "temporal"),
-				resources.Env("VISIBILITY_DBNAME", "temporal_visibility"),
-				resources.Env("DEFAULT_NAMESPACE", "default"),
 			)
 			deployment.AddSecrets(
 				resources.Env("POSTGRES_USER", user),

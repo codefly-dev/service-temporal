@@ -146,7 +146,7 @@ func TestTemporalFullStack(t *testing.T) {
 	require.NoError(t, err)
 	networkMgr.WithTemporaryPorts()
 
-	networkMappings, err := networkMgr.GenerateNetworkMappings(ctx, env, workspace, runtime.Identity, runtime.Endpoints)
+	networkMappings, err := networkMgr.GenerateNetworkMappings(ctx, env, workspace, runtime.Identity, runtime.Endpoints, resources.NewRuntimeContextNative())
 	require.NoError(t, err)
 
 	// Pass the REAL postgres connection from codefly as a dependency
