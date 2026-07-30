@@ -13,10 +13,25 @@ spec:
       labels:
         app: "temporal-{{ .Service.Name.DNSCase }}"
     spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: temporal
           image: {{ .Image }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 7233
               name: grpc
@@ -25,8 +40,20 @@ spec:
           envFrom:
             - configMapRef:
                 name: "temporal-{{ .Service.Name.DNSCase }}-config"
+{{- if not .Restricted }}
             - secretRef:
                 name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
+{{- end }}
+{{- if and .Restricted .SecretReferences }}
+          env:
+{{- range $name, $ref := .SecretReferences }}
+            - name: "{{ $name }}"
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ $ref.Name }}"
+                  key: "{{ $ref.Key }}"
+{{- end }}
+{{- end }}
           resources:
             requests:
               memory: "512Mi"
@@ -34,3 +61,22 @@ spec:
             limits:
               memory: "2Gi"
               cpu: "1000m"
+          startupProbe:
+            tcpSocket:
+              port: 7233
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 7233
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 7233
+            periodSeconds: 15
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
