@@ -62,18 +62,13 @@ func TestManifestGuardRender(t *testing.T) {
 			"POSTGRES_PWD":  {Name: "temporal-postgres", Key: "password"},
 		},
 	}
+	configMap, err := services.EnvsAsConfigMapData(temporalServerConfig()...)
+	require.NoError(t, err)
 	params := services.DeploymentParameters{
-		ConfigMap: services.EnvironmentMap{
-			"DB":                "postgres12_pgx",
-			"DBNAME":            "temporal",
-			"VISIBILITY_DBNAME": "temporal_visibility",
-			"POSTGRES_SEEDS":    "temporal-postgres",
-			"DB_PORT":           "5432",
-			"DEFAULT_NAMESPACE": "default",
-		},
+		ConfigMap:        configMap,
 		SecretReferences: deployment.GetSecretReferences(),
 	}
 
-	err := builder.KustomizeDeploy(ctx, &basev0.Environment{Name: environment}, deployment, deploymentFS, params)
+	err = builder.KustomizeDeploy(ctx, &basev0.Environment{Name: environment}, deployment, deploymentFS, params)
 	require.NoError(t, err)
 }

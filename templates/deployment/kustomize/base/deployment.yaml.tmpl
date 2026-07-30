@@ -44,7 +44,7 @@ spec:
             - secretRef:
                 name: "temporal-{{ .Service.Name.DNSCase }}-secrets"
 {{- end }}
-{{- if .Restricted }}
+{{- if and .Restricted .SecretReferences }}
           env:
 {{- range $name, $ref := .SecretReferences }}
             - name: "{{ $name }}"
