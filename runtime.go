@@ -242,10 +242,10 @@ func (s *Runtime) startTemporalServer(ctx context.Context) error {
 	}
 
 	// Apply schema migrations (idempotent — checks if schema_version table exists)
-	if err := s.ensureSchema(ctx, "temporal", temporalSchemaSQL); err != nil {
+	if err := s.ensureSchema(ctx, "temporal", temporalSchemaSQL, temporalSchemaVersion); err != nil {
 		return fmt.Errorf("cannot apply temporal schema: %w", err)
 	}
-	if err := s.ensureSchema(ctx, "temporal_visibility", visibilitySchemaSQL); err != nil {
+	if err := s.ensureSchema(ctx, "temporal_visibility", visibilitySchemaSQL, visibilitySchemaVersion); err != nil {
 		return fmt.Errorf("cannot apply visibility schema: %w", err)
 	}
 
@@ -572,8 +572,14 @@ func getFreePort() int {
 var _ = postgresql.PluginName
 
 // Embedded schema SQL for Temporal's PostgreSQL databases.
-// These are copied from go.temporal.io/server/schema/postgresql/v12/.
-//
+// These are copied from go.temporal.io/server/schema/postgresql/v12/, and the
+// versions below must match the Version/VisibilityVersion constants that the
+// pinned server release enforces during its schema compatibility check.
+const (
+	temporalSchemaVersion   = "1.19"
+	visibilitySchemaVersion = "1.14"
+)
+
 //go:embed schema/temporal.sql
 var temporalSchemaSQL string
 
@@ -582,7 +588,7 @@ var visibilitySchemaSQL string
 
 // ensureSchema applies the base schema to a database if schema_version doesn't exist yet.
 // Idempotent: if schema_version already exists, it's a no-op.
-func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL string) error {
+func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL string, schemaVersion string) error {
 	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable",
 		s.postgresUser, s.postgresPassword, s.postgresHost, s.postgresPort, dbName)
 
@@ -627,8 +633,8 @@ func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL str
 	}
 
 	_, err = db.ExecContext(ctx,
-		"INSERT INTO schema_version (version_partition, db_name, creation_time, curr_version, min_compatible_version) VALUES (0, $1, NOW(), '1.18', '1.0') ON CONFLICT DO NOTHING",
-		dbName)
+		"INSERT INTO schema_version (version_partition, db_name, creation_time, curr_version, min_compatible_version) VALUES (0, $1, NOW(), $2, '1.0') ON CONFLICT DO NOTHING",
+		dbName, schemaVersion)
 	if err != nil {
 		return fmt.Errorf("insert schema_version in %s: %w", dbName, err)
 	}

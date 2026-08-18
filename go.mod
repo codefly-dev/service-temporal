@@ -8,7 +8,7 @@ require (
 	github.com/stretchr/testify v1.12.0
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.47.0
-	go.temporal.io/server v1.31.2
+	go.temporal.io/server v1.32.0-161.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -65,6 +65,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cactus/go-statsd-client/statsd v0.0.0-20200423205355-cb0885a1018c // indirect
 	github.com/cactus/go-statsd-client/v5 v5.1.0 // indirect
+	github.com/caio/go-tdigest/v5 v5.0.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cheggaaa/pb/v3 v3.2.0 // indirect
@@ -199,6 +200,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/prometheus v0.67.0 // indirect
+	go.opentelemetry.io/otel/log v0.20.0 // indirect
 	go.opentelemetry.io/otel/metric v1.45.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.45.0 // indirect
