@@ -1,6 +1,6 @@
 module github.com/codefly-dev/service-temporal
 
-go 1.27
+go 1.26.4
 
 require (
 	github.com/codefly-dev/core v0.3.0
