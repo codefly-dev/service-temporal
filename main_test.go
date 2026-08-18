@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,19 +90,54 @@ func TestTemporalFullStack(t *testing.T) {
 	ctx := context.Background()
 	wool.SetGlobalLogLevel(wool.DEBUG)
 
+	pgConn := startTestPostgres(ctx, t)
+	grpcAddr := bootTemporal(ctx, t, pgConn)
+
+	runPingWorkflow(ctx, t, grpcAddr)
+	assertSchemaCurrent(ctx, t, pgConn)
+}
+
+// TestTemporalSchemaUpgrade proves the runtime migrates a database created by a
+// previous release. It seeds temporal / temporal_visibility with the base
+// snapshots and the "1.18" schema_version marker that older code always wrote
+// (regardless of the actual applied structure), then boots the server. The
+// pinned server enforces temporal schema 1.19, so a boot that skipped the
+// upgrade would fail its compatibility check and the ping workflow would never
+// complete.
+func TestTemporalSchemaUpgrade(t *testing.T) {
+	if _, err := exec.LookPath("codefly"); err != nil {
+		t.Skip("codefly CLI not available; skipping full-stack integration test")
+	}
+
+	ctx := context.Background()
+	wool.SetGlobalLogLevel(wool.DEBUG)
+
+	pgConn := startTestPostgres(ctx, t)
+	seedLegacySchema(ctx, t, pgConn)
+
+	grpcAddr := bootTemporal(ctx, t, pgConn)
+
+	runPingWorkflow(ctx, t, grpcAddr)
+	assertSchemaCurrent(ctx, t, pgConn)
+}
+
+// startTestPostgres starts the postgres dependency via codefly and returns its
+// owner connection string. Cleanup restores the working directory and tears the
+// dependency down.
+func startTestPostgres(ctx context.Context, t *testing.T) string {
 	// cd into the temporal service dir so codefly finds the workspace
 	workspaceDir, err := filepath.Abs("testdata/workspace/services/temporal")
 	require.NoError(t, err)
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
 	require.NoError(t, os.Chdir(workspaceDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
-	// ── 1. Start dependencies (postgres) via codefly ──
-	// --exclude-root means codefly starts ONLY the dependencies, not temporal itself.
-	// We start temporal ourselves below.
+	// --exclude-root means codefly starts ONLY the dependencies, not temporal
+	// itself. We start temporal ourselves via the runtime.
 	deps, err := sdk.WithDependencies(ctx, sdk.WithDebug(), sdk.WithTimeout(90*time.Second))
 	require.NoError(t, err, "codefly must start postgres")
-	defer func() { _ = deps.Destroy(ctx) }()
+	t.Cleanup(func() { _ = deps.Destroy(ctx) })
 
 	// Get the postgres connection using the resources helper (not hardcoded env vars)
 	pgEnvKey := resources.ServiceSecretConfigurationKeyFromUnique("temporal-test/postgres", "postgres", "owner-connection")
@@ -109,10 +145,14 @@ func TestTemporalFullStack(t *testing.T) {
 	require.NotEmpty(t, pgConn, "postgres connection must be injected by codefly (env key: %s)", pgEnvKey)
 	t.Logf("Postgres: %s", pgConn)
 
-	// ── 2. Start temporal via our own runtime ──
-	// Go back to the plugin dir for building
+	// Back to the plugin dir so the runtime can build the service.
 	require.NoError(t, os.Chdir(origDir))
+	return pgConn
+}
 
+// bootTemporal builds and starts the embedded Temporal server against the given
+// postgres connection and returns its gRPC address.
+func bootTemporal(ctx context.Context, t *testing.T, pgConn string) string {
 	tmpDir := t.TempDir()
 	workspace := &resources.Workspace{Name: "test"}
 	env := resources.LocalEnvironment()
@@ -131,7 +171,7 @@ func TestTemporalFullStack(t *testing.T) {
 	}
 
 	builder := NewBuilder()
-	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{
 		Identity:     temporalIdentity,
 		CreationMode: &builderv0.CreationMode{Communicate: false},
 	})
@@ -172,7 +212,7 @@ func TestTemporalFullStack(t *testing.T) {
 		DependenciesConfigurations: depConfs,
 	})
 	require.NoError(t, err)
-	defer func() { _, _ = runtime.Destroy(ctx, &runtimev0.DestroyRequest{}) }()
+	t.Cleanup(func() { _, _ = runtime.Destroy(ctx, &runtimev0.DestroyRequest{}) })
 
 	// Start the embedded Temporal server
 	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
@@ -186,8 +226,12 @@ func TestTemporalFullStack(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, grpcAddr)
 	t.Logf("Temporal gRPC: %s", grpcAddr)
+	return grpcAddr
+}
 
-	// ── 3. Connect and execute a workflow ──
+// runPingWorkflow connects a worker + client and executes a workflow end to end.
+// It only succeeds if the server actually came up and is serving.
+func runPingWorkflow(ctx context.Context, t *testing.T, grpcAddr string) {
 	c, err := temporalclient.Dial(temporalclient.Options{
 		HostPort:  grpcAddr,
 		Namespace: "default",
@@ -214,6 +258,98 @@ func TestTemporalFullStack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pong: hello", result)
 	t.Logf("SUCCESS: %s", result)
+}
+
+// assertSchemaCurrent verifies both databases carry the structure and recorded
+// version the pinned server requires — the checks that would have caught a
+// schema declared at a version its content does not match.
+func assertSchemaCurrent(ctx context.Context, t *testing.T, pgConn string) {
+	host, port, user, password, err := parsePostgresConnectionString(pgConn)
+	require.NoError(t, err)
+	openDB := func(dbName string) *sql.DB {
+		db, err := sql.Open("postgres", fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable", user, password, host, port, dbName))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+
+	tdb := openDB("temporal")
+	var chasm bool
+	require.NoError(t, tdb.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='current_chasm_executions')").Scan(&chasm))
+	assert.True(t, chasm, "temporal must have current_chasm_executions table (schema v1.19)")
+	var temporalVer string
+	require.NoError(t, tdb.QueryRowContext(ctx,
+		"SELECT curr_version FROM schema_version WHERE db_name='temporal'").Scan(&temporalVer))
+	assert.Equal(t, temporalSchemaVersion, temporalVer, "temporal schema_version must be recorded as current")
+
+	vdb := openDB("temporal_visibility")
+	var externalPayloadCol bool
+	require.NoError(t, vdb.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='executions_visibility' AND lower(column_name)=lower('TemporalExternalPayloadSizeBytes'))").Scan(&externalPayloadCol))
+	assert.True(t, externalPayloadCol, "visibility must have TemporalExternalPayloadSizeBytes column (schema v1.14)")
+	var visibilityVer string
+	require.NoError(t, vdb.QueryRowContext(ctx,
+		"SELECT curr_version FROM schema_version WHERE db_name='temporal_visibility'").Scan(&visibilityVer))
+	assert.Equal(t, visibilitySchemaVersion, visibilityVer, "visibility schema_version must be recorded as current")
+}
+
+// seedLegacySchema reproduces a database created by a previous release: the base
+// snapshots applied with the schema_version marker hardcoded to "1.18" for both
+// databases, which is what the prior code wrote regardless of actual structure.
+//
+// The `temporal` database is provisioned and held open by the codefly postgres
+// agent, so it is reset by clearing its public schema rather than dropping the
+// database (dropping it out from under the agent races with its setup). The
+// snapshots recreate the extension and functions they need, so a cleared schema
+// is a sufficient blank slate.
+func seedLegacySchema(ctx context.Context, t *testing.T, pgConn string) {
+	host, port, user, password, err := parsePostgresConnectionString(pgConn)
+	require.NoError(t, err)
+
+	admin, err := sql.Open("postgres", fmt.Sprintf("postgresql://%s:%s@%s:%d/postgres?sslmode=disable", user, password, host, port))
+	require.NoError(t, err)
+	defer admin.Close()
+
+	seed := func(dbName, schemaSQL string) {
+		var exists bool
+		require.NoError(t, admin.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&exists))
+		if !exists {
+			_, err := admin.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName))
+			require.NoError(t, err)
+		}
+
+		db, err := sql.Open("postgres", fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable", user, password, host, port, dbName))
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Clear any prior structure (e.g. from an earlier test in this run) so
+		// the legacy snapshot applies onto a blank slate.
+		_, err = db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+		require.NoError(t, err)
+
+		_, err = db.ExecContext(ctx, schemaSQL)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `
+			CREATE TABLE schema_version (
+				version_partition INT NOT NULL,
+				db_name VARCHAR(255) NOT NULL,
+				creation_time TIMESTAMP,
+				curr_version VARCHAR(64),
+				min_compatible_version VARCHAR(64),
+				PRIMARY KEY (version_partition, db_name)
+			)`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx,
+			"INSERT INTO schema_version (version_partition, db_name, creation_time, curr_version, min_compatible_version) VALUES (0, $1, NOW(), '1.18', '1.0')",
+			dbName)
+		require.NoError(t, err)
+	}
+
+	seed("temporal", temporalSchemaSQL)
+	seed("temporal_visibility", visibilitySchemaSQL)
+	t.Logf("seeded legacy schema (v1.18 marker) for temporal and temporal_visibility")
 }
 
 func pingWorkflow(ctx workflow.Context, input string) (string, error) {

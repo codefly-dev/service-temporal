@@ -241,11 +241,12 @@ func (s *Runtime) startTemporalServer(ctx context.Context) error {
 		return fmt.Errorf("cannot ensure temporal_visibility database: %w", err)
 	}
 
-	// Apply schema migrations (idempotent — checks if schema_version table exists)
-	if err := s.ensureSchema(ctx, "temporal", temporalSchemaSQL); err != nil {
+	// Apply the base schema (fresh databases only) then bring every database up
+	// to the current version via the idempotent upgrade deltas.
+	if err := s.ensureSchema(ctx, "temporal", temporalSchemaSQL, temporalUpgradeSQL, temporalSchemaVersion); err != nil {
 		return fmt.Errorf("cannot apply temporal schema: %w", err)
 	}
-	if err := s.ensureSchema(ctx, "temporal_visibility", visibilitySchemaSQL); err != nil {
+	if err := s.ensureSchema(ctx, "temporal_visibility", visibilitySchemaSQL, visibilityUpgradeSQL, visibilitySchemaVersion); err != nil {
 		return fmt.Errorf("cannot apply visibility schema: %w", err)
 	}
 
@@ -571,18 +572,37 @@ func getFreePort() int {
 // Ensure the postgresql plugin is registered.
 var _ = postgresql.PluginName
 
-// Embedded schema SQL for Temporal's PostgreSQL databases.
-// These are copied from go.temporal.io/server/schema/postgresql/v12/.
-//
+// Embedded schema SQL for Temporal's PostgreSQL databases, copied from
+// go.temporal.io/server/schema/postgresql/v12/. The base snapshots seed a fresh
+// database; the *_upgrade.sql deltas advance both fresh and previously-created
+// databases to the versions below, which must match the Version/VisibilityVersion
+// constants the pinned server release enforces during its compatibility check.
+const (
+	temporalSchemaVersion   = "1.19"
+	visibilitySchemaVersion = "1.14"
+)
+
 //go:embed schema/temporal.sql
 var temporalSchemaSQL string
+
+//go:embed schema/temporal_upgrade.sql
+var temporalUpgradeSQL string
 
 //go:embed schema/visibility.sql
 var visibilitySchemaSQL string
 
-// ensureSchema applies the base schema to a database if schema_version doesn't exist yet.
-// Idempotent: if schema_version already exists, it's a no-op.
-func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL string) error {
+//go:embed schema/visibility_upgrade.sql
+var visibilityUpgradeSQL string
+
+// ensureSchema brings a database up to schemaVersion. On a fresh database it
+// applies the base schema; on a database created by an earlier release it skips
+// the base schema (tables already exist) and relies on the upgrade deltas. The
+// upgrade deltas are idempotent, so they run on every startup regardless of the
+// recorded version — a prior release wrote an unreliable version marker, so the
+// applied structure, not that marker, is the source of truth. The recorded
+// version is then rewritten to schemaVersion so the server's compatibility check
+// matches what was actually applied.
+func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL string, upgradeSQL string, schemaVersion string) error {
 	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable",
 		s.postgresUser, s.postgresPassword, s.postgresHost, s.postgresPort, dbName)
 
@@ -600,19 +620,19 @@ func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL str
 		return fmt.Errorf("check schema_version in %s: %w", dbName, err)
 	}
 
-	if exists {
-		s.Infof("schema already applied for %s", dbName)
-		return nil
+	if !exists {
+		s.Infof("applying base schema to %s...", dbName)
+		if _, err = db.ExecContext(ctx, schemaSQL); err != nil {
+			return fmt.Errorf("apply schema to %s: %w", dbName, err)
+		}
+	} else {
+		s.Infof("schema present for %s; applying version upgrades", dbName)
 	}
 
-	// Apply the base schema
-	s.Infof("applying schema to %s...", dbName)
-	_, err = db.ExecContext(ctx, schemaSQL)
-	if err != nil {
-		return fmt.Errorf("apply schema to %s: %w", dbName, err)
+	if _, err = db.ExecContext(ctx, upgradeSQL); err != nil {
+		return fmt.Errorf("upgrade schema in %s: %w", dbName, err)
 	}
 
-	// Insert schema_version so Temporal knows the schema version
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_version (
 			version_partition INT NOT NULL,
@@ -627,12 +647,15 @@ func (s *Runtime) ensureSchema(ctx context.Context, dbName string, schemaSQL str
 	}
 
 	_, err = db.ExecContext(ctx,
-		"INSERT INTO schema_version (version_partition, db_name, creation_time, curr_version, min_compatible_version) VALUES (0, $1, NOW(), '1.18', '1.0') ON CONFLICT DO NOTHING",
-		dbName)
+		`INSERT INTO schema_version (version_partition, db_name, creation_time, curr_version, min_compatible_version)
+		 VALUES (0, $1, NOW(), $2, '1.0')
+		 ON CONFLICT (version_partition, db_name)
+		 DO UPDATE SET curr_version = EXCLUDED.curr_version, creation_time = EXCLUDED.creation_time`,
+		dbName, schemaVersion)
 	if err != nil {
-		return fmt.Errorf("insert schema_version in %s: %w", dbName, err)
+		return fmt.Errorf("record schema_version in %s: %w", dbName, err)
 	}
 
-	s.Infof("schema applied to %s", dbName)
+	s.Infof("schema ensured for %s at version %s", dbName, schemaVersion)
 	return nil
 }

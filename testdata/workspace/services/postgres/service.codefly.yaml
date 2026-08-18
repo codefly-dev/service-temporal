@@ -3,7 +3,7 @@ version: 0.0.0
 agent:
     kind: codefly:service
     name: postgres
-    version: 0.0.99
+    version: 0.0.123
     publisher: codefly.dev
 endpoints:
     - name: tcp
