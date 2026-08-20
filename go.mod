@@ -3,7 +3,7 @@ module github.com/codefly-dev/service-temporal
 go 1.26.4
 
 require (
-	github.com/codefly-dev/core v0.3.3
+	github.com/codefly-dev/core v0.3.4
 	github.com/lib/pq v1.12.3
 	github.com/stretchr/testify v1.12.0
 	go.temporal.io/api v1.63.5
