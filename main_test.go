@@ -136,9 +136,10 @@ func startTestPostgres(ctx context.Context, t *testing.T) string {
 	// --exclude-root means codefly starts ONLY the dependencies, not temporal
 	// itself. We start temporal ourselves via the runtime.
 	//
-	// The timeout must cover a cold start of the postgres dependency: during a
-	// release the CLI pulls the postgres image at test time, which alone can
-	// exceed the previous 90s budget on a loaded CI runner.
+	// The timeout must cover a cold start of the postgres dependency: on the
+	// first `codefly publish` run the CLI downloads the postgres agent and
+	// pulls its image before postgres reports ready, which together can exceed
+	// the previous 90s budget on a loaded machine.
 	deps, err := sdk.WithDependencies(ctx, sdk.WithDebug(), sdk.WithTimeout(3*time.Minute))
 	require.NoError(t, err, "codefly must start postgres")
 	t.Cleanup(func() { _ = deps.Destroy(ctx) })
@@ -251,14 +252,22 @@ func runPingWorkflow(ctx context.Context, t *testing.T, grpcAddr string) {
 
 	time.Sleep(1 * time.Second)
 
-	run, err := c.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
+	// Bound the workflow round-trip explicitly. The server is already confirmed
+	// serving (runtime.Start blocks on WaitForReady), so a completion that does
+	// not arrive quickly means the worker never picked up the task. Fail fast on
+	// that instead of blocking on the background context until the package-level
+	// test timeout, which would strand the whole suite behind one stuck test.
+	wfCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	run, err := c.ExecuteWorkflow(wfCtx, temporalclient.StartWorkflowOptions{
 		ID:        fmt.Sprintf("ping-%d", time.Now().UnixNano()),
 		TaskQueue: taskQueue,
 	}, pingWorkflow, "hello")
 	require.NoError(t, err)
 
 	var result string
-	err = run.Get(ctx, &result)
+	err = run.Get(wfCtx, &result)
 	require.NoError(t, err)
 	assert.Equal(t, "pong: hello", result)
 	t.Logf("SUCCESS: %s", result)
