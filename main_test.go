@@ -135,7 +135,11 @@ func startTestPostgres(ctx context.Context, t *testing.T) string {
 
 	// --exclude-root means codefly starts ONLY the dependencies, not temporal
 	// itself. We start temporal ourselves via the runtime.
-	deps, err := sdk.WithDependencies(ctx, sdk.WithDebug(), sdk.WithTimeout(90*time.Second))
+	//
+	// The timeout must cover a cold start of the postgres dependency: during a
+	// release the CLI pulls the postgres image at test time, which alone can
+	// exceed the previous 90s budget on a loaded CI runner.
+	deps, err := sdk.WithDependencies(ctx, sdk.WithDebug(), sdk.WithTimeout(3*time.Minute))
 	require.NoError(t, err, "codefly must start postgres")
 	t.Cleanup(func() { _ = deps.Destroy(ctx) })
 
