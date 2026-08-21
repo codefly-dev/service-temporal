@@ -53,16 +53,19 @@ func TestManifestGuardRender(t *testing.T) {
 	builder := &services.BuilderWrapper{Base: base}
 	base.Builder = builder
 
+	outputProfile := builderv0.KubernetesOutputProfile(profile)
 	deployment := &builderv0.KubernetesDeployment{
 		Namespace:   namespace,
 		Destination: destination,
-		Profile:     builderv0.KubernetesOutputProfile(profile),
+		Profile:     outputProfile,
 		SecretReferences: map[string]*builderv0.KubernetesSecretKeyReference{
-			"POSTGRES_USER": {Name: "temporal-postgres", Key: "user"},
-			"POSTGRES_PWD":  {Name: "temporal-postgres", Key: "password"},
+			"POSTGRES_SEEDS": {Name: "temporal-postgres", Key: "host"},
+			"DB_PORT":        {Name: "temporal-postgres", Key: "port"},
+			"POSTGRES_USER":  {Name: "temporal-postgres", Key: "user"},
+			"POSTGRES_PWD":   {Name: "temporal-postgres", Key: "password"},
 		},
 	}
-	configMap, err := services.EnvsAsConfigMapData(temporalServerConfig()...)
+	configMap, err := services.EnvsAsConfigMapData(temporalServerConfig(services.IsRestrictedOutputProfile(outputProfile))...)
 	require.NoError(t, err)
 	params := services.DeploymentParameters{
 		ConfigMap:        configMap,

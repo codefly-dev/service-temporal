@@ -74,6 +74,79 @@ func treeHasSecretResource(t *testing.T, dir string) bool {
 	return found
 }
 
+func TestTemporalServerConfigSkipDBCreateByProfile(t *testing.T) {
+	// Restricted/promotable runtime roles are NOCREATEDB, so auto-setup must not
+	// try to create databases. The ephemeral profile connects with owner
+	// credentials and nothing else creates temporal_visibility, so it must.
+	restricted, err := services.EnvsAsConfigMapData(temporalServerConfig(true)...)
+	require.NoError(t, err)
+	require.Equal(t, "true", restricted["SKIP_DB_CREATE"])
+
+	ephemeral, err := services.EnvsAsConfigMapData(temporalServerConfig(false)...)
+	require.NoError(t, err)
+	require.Equal(t, "false", ephemeral["SKIP_DB_CREATE"],
+		"ephemeral must let auto-setup create temporal_visibility; nothing else does")
+}
+
+// TestAutoSetupEnvConformance exercises the render-time check exactly as the
+// Deploy hook invokes it: from ConfigMap values, inlined Secret values, and
+// external Secret references combined.
+func TestAutoSetupEnvConformance(t *testing.T) {
+	ref := func() map[string]*builderv0.KubernetesSecretKeyReference {
+		return map[string]*builderv0.KubernetesSecretKeyReference{}
+	}
+	withRefs := func(names ...string) map[string]*builderv0.KubernetesSecretKeyReference {
+		refs := ref()
+		for _, name := range names {
+			refs[name] = &builderv0.KubernetesSecretKeyReference{Name: "temporal-postgres", Key: name}
+		}
+		return refs
+	}
+
+	t.Run("restricted with the discrete secret references is complete", func(t *testing.T) {
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD"),
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("connection-url-only references leave the entrypoint contract unmet", func(t *testing.T) {
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("TEMPORAL_RO_CONNECTION", "TEMPORAL_RW_CONNECTION"),
+		)
+		require.Error(t, err)
+		for _, missing := range []string{"POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD"} {
+			require.Contains(t, err.Error(), missing)
+		}
+	})
+
+	t.Run("restricted references missing the port silently misconnect and must fail", func(t *testing.T) {
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"),
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DB_PORT")
+	})
+
+	t.Run("non-restricted discrete render is complete", func(t *testing.T) {
+		configMap := append(temporalServerConfig(false),
+			resources.Env("POSTGRES_SEEDS", "10.0.0.5"),
+			resources.Env("DB_PORT", 5432),
+		)
+		secrets := []*resources.EnvironmentVariable{
+			resources.Env("POSTGRES_USER", "temporal"),
+			resources.Env("POSTGRES_PWD", "secret"),
+		}
+		require.NoError(t, validateAutoSetupEnv(configMap, secrets, nil))
+	})
+}
+
 func TestDeploymentSecretWiringByProfile(t *testing.T) {
 	restricted := builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1
 	ephemeral := builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1
