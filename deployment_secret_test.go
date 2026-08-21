@@ -74,6 +74,50 @@ func treeHasSecretResource(t *testing.T, dir string) bool {
 	return found
 }
 
+func TestTemporalServerConfigSkipsDBCreate(t *testing.T) {
+	data, err := services.EnvsAsConfigMapData(temporalServerConfig()...)
+	require.NoError(t, err)
+	require.Equal(t, "true", data["SKIP_DB_CREATE"],
+		"auto-setup must skip DB creation: rendered Postgres roles are NOCREATEDB")
+}
+
+// TestAutoSetupEnvConformance covers the render-time check that every variable
+// the auto-setup entrypoint needs to reach Postgres is injected. The present
+// set is assembled the way the Deploy hook assembles it — ConfigMap keys plus
+// the names of the injected values (Secret data or external Secret references).
+func TestAutoSetupEnvConformance(t *testing.T) {
+	configKeys := func() map[string]struct{} {
+		present := map[string]struct{}{}
+		for _, env := range temporalServerConfig() {
+			present[env.Key] = struct{}{}
+		}
+		return present
+	}
+	with := func(base map[string]struct{}, names ...string) map[string]struct{} {
+		for _, name := range names {
+			base[name] = struct{}{}
+		}
+		return base
+	}
+
+	t.Run("restricted with the discrete secret references is complete", func(t *testing.T) {
+		present := with(configKeys(), "POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD")
+		require.Empty(t, missingAutoSetupEnv(present))
+	})
+
+	t.Run("connection-url-only references leave the entrypoint contract unmet", func(t *testing.T) {
+		present := with(configKeys(), "TEMPORAL_RO_CONNECTION", "TEMPORAL_RW_CONNECTION")
+		require.ElementsMatch(t,
+			[]string{"POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"},
+			missingAutoSetupEnv(present))
+	})
+
+	t.Run("non-restricted discrete render is complete", func(t *testing.T) {
+		present := with(configKeys(), "POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD")
+		require.Empty(t, missingAutoSetupEnv(present))
+	})
+}
+
 func TestDeploymentSecretWiringByProfile(t *testing.T) {
 	restricted := builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1
 	ephemeral := builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1

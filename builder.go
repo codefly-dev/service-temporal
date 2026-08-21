@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"strings"
 
 	"github.com/codefly-dev/core/agents/services"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
@@ -20,14 +21,39 @@ type Builder struct {
 // temporalServerConfig is the profile-independent, non-secret Temporal server
 // configuration shared by every deployment. Keeping it in one place lets the
 // manifest-guard render exercise exactly what the production Deploy emits.
+//
+// SKIP_DB_CREATE is true because rendered Postgres runtime roles are
+// NOCREATEDB: auto-setup's create step would fail against them, so the database
+// is provisioned out of band and auto-setup only applies the schema.
 func temporalServerConfig() []*resources.EnvironmentVariable {
 	return []*resources.EnvironmentVariable{
 		resources.Env("DB", "postgres12_pgx"),
-		resources.Env("SKIP_DB_CREATE", false),
+		resources.Env("SKIP_DB_CREATE", true),
 		resources.Env("DBNAME", "temporal"),
 		resources.Env("VISIBILITY_DBNAME", "temporal_visibility"),
 		resources.Env("DEFAULT_NAMESPACE", "default"),
 	}
+}
+
+// requiredAutoSetupEnv lists the environment variables the stock auto-setup
+// entrypoint needs to reach its PostgreSQL database. The entrypoint has no
+// fallback for these: absent them the container crash-loops on DB discovery
+// instead of failing the render, so the deployment asserts their presence.
+func requiredAutoSetupEnv() []string {
+	return []string{"DB", "DBNAME", "VISIBILITY_DBNAME", "POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"}
+}
+
+// missingAutoSetupEnv returns the required auto-setup variables absent from the
+// set of keys the render will inject (ConfigMap data, Secret data, and external
+// Secret references combined).
+func missingAutoSetupEnv(present map[string]struct{}) []string {
+	var missing []string
+	for _, key := range requiredAutoSetupEnv() {
+		if _, ok := present[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	return missing
 }
 
 func NewBuilder() *Builder {
@@ -96,37 +122,49 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 			deployment.AddConfigMap(temporalServerConfig()...)
 			// The restricted profile forbids receiving or serializing secret
 			// values, so the Postgres owner-connection (a secret) is not parsed
-			// here: POSTGRES_USER and POSTGRES_PWD are consumed from
-			// externally-managed Secret references carried in the request.
-			if services.IsRestrictedOutputProfile(deployment.Profile) {
-				return nil
-			}
-			var connection string
-			for _, configuration := range req.GetDependenciesConfigurations() {
-				value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "owner-connection")
+			// here: POSTGRES_SEEDS, POSTGRES_USER and POSTGRES_PWD are consumed
+			// from externally-managed Secret references carried in the request.
+			if !services.IsRestrictedOutputProfile(deployment.Profile) {
+				var connection string
+				for _, configuration := range req.GetDependenciesConfigurations() {
+					value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "owner-connection")
+					if err != nil {
+						return err
+					}
+					if value != "" {
+						connection = value
+						break
+					}
+				}
+				if connection == "" {
+					return fmt.Errorf("temporal requires the postgres owner-connection migration capability")
+				}
+				host, port, user, password, err := parsePostgresConnectionString(connection)
 				if err != nil {
 					return err
 				}
-				if value != "" {
-					connection = value
-					break
-				}
+				deployment.AddConfigMap(
+					resources.Env("POSTGRES_SEEDS", host),
+					resources.Env("DB_PORT", port),
+				)
+				deployment.AddSecrets(
+					resources.Env("POSTGRES_USER", user),
+					resources.Env("POSTGRES_PWD", password),
+				)
 			}
-			if connection == "" {
-				return fmt.Errorf("temporal requires the postgres owner-connection migration capability")
+			present := make(map[string]struct{})
+			for _, env := range deployment.ConfigMap {
+				present[env.Key] = struct{}{}
 			}
-			host, port, user, password, err := parsePostgresConnectionString(connection)
-			if err != nil {
-				return err
+			for _, env := range deployment.Secrets {
+				present[env.Key] = struct{}{}
 			}
-			deployment.AddConfigMap(
-				resources.Env("POSTGRES_SEEDS", host),
-				resources.Env("DB_PORT", port),
-			)
-			deployment.AddSecrets(
-				resources.Env("POSTGRES_USER", user),
-				resources.Env("POSTGRES_PWD", password),
-			)
+			for name := range deployment.Kubernetes.GetSecretReferences() {
+				present[name] = struct{}{}
+			}
+			if missing := missingAutoSetupEnv(present); len(missing) > 0 {
+				return fmt.Errorf("auto-setup entrypoint requires environment not injected by the render: %s", strings.Join(missing, ", "))
+			}
 			return nil
 		},
 	})
