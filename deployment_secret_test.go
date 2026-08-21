@@ -74,47 +74,76 @@ func treeHasSecretResource(t *testing.T, dir string) bool {
 	return found
 }
 
-func TestTemporalServerConfigSkipsDBCreate(t *testing.T) {
-	data, err := services.EnvsAsConfigMapData(temporalServerConfig()...)
+func TestTemporalServerConfigSkipDBCreateByProfile(t *testing.T) {
+	// Restricted/promotable runtime roles are NOCREATEDB, so auto-setup must not
+	// try to create databases. The ephemeral profile connects with owner
+	// credentials and nothing else creates temporal_visibility, so it must.
+	restricted, err := services.EnvsAsConfigMapData(temporalServerConfig(true)...)
 	require.NoError(t, err)
-	require.Equal(t, "true", data["SKIP_DB_CREATE"],
-		"auto-setup must skip DB creation: rendered Postgres roles are NOCREATEDB")
+	require.Equal(t, "true", restricted["SKIP_DB_CREATE"])
+
+	ephemeral, err := services.EnvsAsConfigMapData(temporalServerConfig(false)...)
+	require.NoError(t, err)
+	require.Equal(t, "false", ephemeral["SKIP_DB_CREATE"],
+		"ephemeral must let auto-setup create temporal_visibility; nothing else does")
 }
 
-// TestAutoSetupEnvConformance covers the render-time check that every variable
-// the auto-setup entrypoint needs to reach Postgres is injected. The present
-// set is assembled the way the Deploy hook assembles it — ConfigMap keys plus
-// the names of the injected values (Secret data or external Secret references).
+// TestAutoSetupEnvConformance exercises the render-time check exactly as the
+// Deploy hook invokes it: from ConfigMap values, inlined Secret values, and
+// external Secret references combined.
 func TestAutoSetupEnvConformance(t *testing.T) {
-	configKeys := func() map[string]struct{} {
-		present := map[string]struct{}{}
-		for _, env := range temporalServerConfig() {
-			present[env.Key] = struct{}{}
-		}
-		return present
+	ref := func() map[string]*builderv0.KubernetesSecretKeyReference {
+		return map[string]*builderv0.KubernetesSecretKeyReference{}
 	}
-	with := func(base map[string]struct{}, names ...string) map[string]struct{} {
+	withRefs := func(names ...string) map[string]*builderv0.KubernetesSecretKeyReference {
+		refs := ref()
 		for _, name := range names {
-			base[name] = struct{}{}
+			refs[name] = &builderv0.KubernetesSecretKeyReference{Name: "temporal-postgres", Key: name}
 		}
-		return base
+		return refs
 	}
 
 	t.Run("restricted with the discrete secret references is complete", func(t *testing.T) {
-		present := with(configKeys(), "POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD")
-		require.Empty(t, missingAutoSetupEnv(present))
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD"),
+		)
+		require.NoError(t, err)
 	})
 
 	t.Run("connection-url-only references leave the entrypoint contract unmet", func(t *testing.T) {
-		present := with(configKeys(), "TEMPORAL_RO_CONNECTION", "TEMPORAL_RW_CONNECTION")
-		require.ElementsMatch(t,
-			[]string{"POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"},
-			missingAutoSetupEnv(present))
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("TEMPORAL_RO_CONNECTION", "TEMPORAL_RW_CONNECTION"),
+		)
+		require.Error(t, err)
+		for _, missing := range []string{"POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD"} {
+			require.Contains(t, err.Error(), missing)
+		}
+	})
+
+	t.Run("restricted references missing the port silently misconnect and must fail", func(t *testing.T) {
+		err := validateAutoSetupEnv(
+			temporalServerConfig(true),
+			nil,
+			withRefs("POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"),
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DB_PORT")
 	})
 
 	t.Run("non-restricted discrete render is complete", func(t *testing.T) {
-		present := with(configKeys(), "POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD")
-		require.Empty(t, missingAutoSetupEnv(present))
+		configMap := append(temporalServerConfig(false),
+			resources.Env("POSTGRES_SEEDS", "10.0.0.5"),
+			resources.Env("DB_PORT", 5432),
+		)
+		secrets := []*resources.EnvironmentVariable{
+			resources.Env("POSTGRES_USER", "temporal"),
+			resources.Env("POSTGRES_PWD", "secret"),
+		}
+		require.NoError(t, validateAutoSetupEnv(configMap, secrets, nil))
 	})
 }
 

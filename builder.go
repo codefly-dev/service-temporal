@@ -18,17 +18,20 @@ type Builder struct {
 	*Service
 }
 
-// temporalServerConfig is the profile-independent, non-secret Temporal server
-// configuration shared by every deployment. Keeping it in one place lets the
-// manifest-guard render exercise exactly what the production Deploy emits.
+// temporalServerConfig is the non-secret Temporal server configuration shared by
+// every deployment. Keeping it in one place lets the manifest-guard render
+// exercise exactly what the production Deploy emits.
 //
-// SKIP_DB_CREATE is true because rendered Postgres runtime roles are
-// NOCREATEDB: auto-setup's create step would fail against them, so the database
-// is provisioned out of band and auto-setup only applies the schema.
-func temporalServerConfig() []*resources.EnvironmentVariable {
+// skipDBCreate must be true only for the restricted/promotable profiles, whose
+// rendered Postgres runtime roles are NOCREATEDB: auto-setup's create step would
+// fail against them, so both databases are provisioned out of band and
+// auto-setup only applies the schema. The ephemeral profile connects with the
+// owner-connection credentials, which can create databases, and nothing else
+// creates temporal_visibility — so it keeps auto-setup's create step enabled.
+func temporalServerConfig(skipDBCreate bool) []*resources.EnvironmentVariable {
 	return []*resources.EnvironmentVariable{
 		resources.Env("DB", "postgres12_pgx"),
-		resources.Env("SKIP_DB_CREATE", true),
+		resources.Env("SKIP_DB_CREATE", skipDBCreate),
 		resources.Env("DBNAME", "temporal"),
 		resources.Env("VISIBILITY_DBNAME", "temporal_visibility"),
 		resources.Env("DEFAULT_NAMESPACE", "default"),
@@ -38,9 +41,11 @@ func temporalServerConfig() []*resources.EnvironmentVariable {
 // requiredAutoSetupEnv lists the environment variables the stock auto-setup
 // entrypoint needs to reach its PostgreSQL database. The entrypoint has no
 // fallback for these: absent them the container crash-loops on DB discovery
-// instead of failing the render, so the deployment asserts their presence.
+// (or silently connects to the wrong port) instead of failing the render, so
+// the deployment asserts their presence. DB_PORT is included because auto-setup
+// defaults it to 5432, which silently misconnects a non-5432 endpoint.
 func requiredAutoSetupEnv() []string {
-	return []string{"DB", "DBNAME", "VISIBILITY_DBNAME", "POSTGRES_SEEDS", "POSTGRES_USER", "POSTGRES_PWD"}
+	return []string{"DB", "DBNAME", "VISIBILITY_DBNAME", "POSTGRES_SEEDS", "DB_PORT", "POSTGRES_USER", "POSTGRES_PWD"}
 }
 
 // missingAutoSetupEnv returns the required auto-setup variables absent from the
@@ -54,6 +59,27 @@ func missingAutoSetupEnv(present map[string]struct{}) []string {
 		}
 	}
 	return missing
+}
+
+// validateAutoSetupEnv fails the render when any variable the auto-setup
+// entrypoint requires is absent from the three channels that inject environment
+// into the pod: ConfigMap data, inlined Secret data, and external Secret
+// references.
+func validateAutoSetupEnv(configMap, secrets []*resources.EnvironmentVariable, references map[string]*builderv0.KubernetesSecretKeyReference) error {
+	present := make(map[string]struct{})
+	for _, env := range configMap {
+		present[env.Key] = struct{}{}
+	}
+	for _, env := range secrets {
+		present[env.Key] = struct{}{}
+	}
+	for name := range references {
+		present[name] = struct{}{}
+	}
+	if missing := missingAutoSetupEnv(present); len(missing) > 0 {
+		return fmt.Errorf("auto-setup entrypoint requires environment not injected by the render: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func NewBuilder() *Builder {
@@ -119,12 +145,14 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
 		Prepare: func(_ context.Context, deployment *services.KustomizeDeploymentContext) error {
-			deployment.AddConfigMap(temporalServerConfig()...)
+			restricted := services.IsRestrictedOutputProfile(deployment.Profile)
+			deployment.AddConfigMap(temporalServerConfig(restricted)...)
 			// The restricted profile forbids receiving or serializing secret
 			// values, so the Postgres owner-connection (a secret) is not parsed
-			// here: POSTGRES_SEEDS, POSTGRES_USER and POSTGRES_PWD are consumed
-			// from externally-managed Secret references carried in the request.
-			if !services.IsRestrictedOutputProfile(deployment.Profile) {
+			// here: POSTGRES_SEEDS, DB_PORT, POSTGRES_USER and POSTGRES_PWD are
+			// consumed from externally-managed Secret references carried in the
+			// request.
+			if !restricted {
 				var connection string
 				for _, configuration := range req.GetDependenciesConfigurations() {
 					value, err := resources.GetConfigurationValue(ctx, configuration, "postgres", "owner-connection")
@@ -152,20 +180,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 					resources.Env("POSTGRES_PWD", password),
 				)
 			}
-			present := make(map[string]struct{})
-			for _, env := range deployment.ConfigMap {
-				present[env.Key] = struct{}{}
-			}
-			for _, env := range deployment.Secrets {
-				present[env.Key] = struct{}{}
-			}
-			for name := range deployment.Kubernetes.GetSecretReferences() {
-				present[name] = struct{}{}
-			}
-			if missing := missingAutoSetupEnv(present); len(missing) > 0 {
-				return fmt.Errorf("auto-setup entrypoint requires environment not injected by the render: %s", strings.Join(missing, ", "))
-			}
-			return nil
+			return validateAutoSetupEnv(deployment.ConfigMap, deployment.Secrets, deployment.Kubernetes.GetSecretReferences())
 		},
 	})
 }
