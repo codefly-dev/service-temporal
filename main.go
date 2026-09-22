@@ -61,6 +61,19 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 			Docker: true,
 		},
 		Toolchains: []agentv0.Toolchain_Type{agentv0.Toolchain_GO},
+		Validation: &agentv0.ValidationCapabilities{
+			Test: &agentv0.TestValidationCapability{
+				Supported: true,
+				Scopes:    []agentv0.ValidationScope{agentv0.ValidationScope_VALIDATION_SCOPE_WORKSPACE},
+				Suites: []*agentv0.TestSuiteCapability{{
+					Name:           "readiness",
+					DefaultSuite:   true,
+					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK,
+				}},
+			},
+			Audit: &agentv0.ValidationOperationCapability{Supported: true},
+			Sbom:  &agentv0.ValidationOperationCapability{Supported: true},
+		},
 		Config: []*agentv0.ConfigurationValueDetail{
 			{
 				Name: "connection", Description: "Temporal connection details",

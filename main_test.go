@@ -223,6 +223,11 @@ func bootTemporal(ctx context.Context, t *testing.T, pgConn string) string {
 	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
 	require.NoError(t, err)
 	t.Logf("Temporal running on port %d", runtime.grpcPort)
+	readiness, err := runtime.Test(ctx, &runtimev0.TestRequest{Suite: "readiness"})
+	require.NoError(t, err)
+	require.Equal(t, runtimev0.TestStatus_SUCCESS, readiness.GetStatus().GetState())
+	require.EqualValues(t, 1, readiness.GetTestsRun())
+	require.EqualValues(t, 1, readiness.GetTestsPassed())
 
 	// Extract gRPC connection
 	temporalConf, err := resources.ExtractConfiguration(temporalInitResp.RuntimeConfigurations, resources.NewRuntimeContextNative())

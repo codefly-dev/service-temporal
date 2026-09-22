@@ -467,7 +467,37 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 }
 
 func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
-	return s.Runtime.TestResponse()
+	if req.GetSuite() != "" && req.GetSuite() != "readiness" {
+		return s.Runtime.TestError(fmt.Errorf("unknown Temporal test suite %q", req.GetSuite()))
+	}
+	if selection := req.GetSelection(); selection != nil && selection.GetSuite().GetName() != "readiness" {
+		return s.Runtime.TestError(fmt.Errorf("Temporal tests support only the readiness suite"))
+	}
+	if req.GetTarget() != "" || len(req.GetFilters()) != 0 || len(req.GetExtraArgs()) != 0 || req.GetFormula() != nil || req.GetRace() || req.GetCoverage() {
+		return s.Runtime.TestError(fmt.Errorf("Temporal readiness does not support source-test selectors or instrumentation"))
+	}
+	timeout := 30 * time.Second
+	if req.GetTimeout() != "" {
+		var err error
+		timeout, err = time.ParseDuration(req.GetTimeout())
+		if err != nil || timeout <= 0 {
+			return s.Runtime.TestError(fmt.Errorf("invalid readiness timeout %q", req.GetTimeout()))
+		}
+	}
+	if s.temporalServer == nil || s.grpcPort == 0 {
+		return s.Runtime.TestError(fmt.Errorf("Temporal readiness requires the started service stack"))
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := grpc.NewClient(fmt.Sprintf("localhost:%d", s.grpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err == nil {
+		defer conn.Close()
+		_, err = workflowservice.NewWorkflowServiceClient(conn).GetSystemInfo(ctx, &workflowservice.GetSystemInfoRequest{})
+	}
+	if err != nil {
+		return s.Runtime.TestResponseWithResults(1, 0, 1, 0, 0, []string{err.Error()}, err)
+	}
+	return s.Runtime.TestResponseWithResults(1, 1, 0, 0, 0, nil, nil)
 }
 
 // parsePostgresConnectionString extracts host, port, user, password from a
