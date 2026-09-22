@@ -58,7 +58,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		Backends: runnersbase.BackendSupport{
 			Local:  func() bool { return languages.HasGoRuntime(nil) },
 			Nix:    false,
-			Docker: true,
+			Docker: false,
 		},
 		Toolchains: []agentv0.Toolchain_Type{agentv0.Toolchain_GO},
 		Validation: &agentv0.ValidationCapabilities{

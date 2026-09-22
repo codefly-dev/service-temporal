@@ -103,10 +103,10 @@ func (s *Runtime) CreateConnectionsConfiguration(runtimeContext *basev0.RuntimeC
 	}
 }
 
-// resolvePostgresFromDependencies extracts Postgres connection details from
-// codefly dependency configurations (postgres service).
+// The embedded server executes in the agent process, not in a service container.
+// Select the host projection before inspecting the database's declarations.
 func (s *Runtime) resolvePostgresFromDependencies(confs []*basev0.Configuration) error {
-	for _, conf := range confs {
+	for _, conf := range resources.FilterConfigurations(confs, resources.NewRuntimeContextNative()) {
 		for _, info := range conf.Infos {
 			if info.Name == "postgres" {
 				for _, cv := range info.ConfigurationValues {
@@ -186,8 +186,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.Infof("Temporal gRPC will run on localhost:%d", s.grpcPort)
 	s.Infof("Temporal HTTP will run on localhost:%d", s.httpPort)
 
-	// Resolve Postgres connection from dependency configurations
-	// Filter for the appropriate runtime context (like go-grpc does)
+	// Resolve the host-side Postgres configuration for the embedded server.
 	if req.DependenciesConfigurations == nil || len(req.DependenciesConfigurations) == 0 {
 		return s.Runtime.InitErrorf(fmt.Errorf("no dependencies configurations"), "temporal requires postgres dependency")
 	}
