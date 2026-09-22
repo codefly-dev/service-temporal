@@ -5,3 +5,6 @@ version: 0.0.18
 release:
   owner: workflow
   workflow: releaser.yml
+conformance:
+  mode: attach-existing-source
+  fixture: testdata/workspace
