@@ -124,6 +124,17 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	return s.Builder.InitResponse()
 }
 
+// Temporal runs an upstream image and owns no generated source files. Both sync
+// modes therefore leave the loaded service unchanged, with no drift to report.
+func (s *Builder) Sync(context.Context, *builderv0.SyncRequest) (*builderv0.SyncResponse, error) {
+	return s.Builder.SyncResponse()
+}
+
+func (s *Builder) Build(context.Context, *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
+	s.Builder.WithDockerImages(image)
+	return s.Builder.BuildResponse()
+}
+
 func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*builderv0.AuditResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
