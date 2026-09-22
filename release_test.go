@@ -20,8 +20,12 @@ func TestReleaseDeclaresOnePublisherAndArchiveSBOMs(t *testing.T) {
 	}
 	var manifest struct {
 		Release struct{ Owner, Workflow string }
+		Source  struct{ Directory, Agent string }
 	}
 	read("agent.codefly.yaml", &manifest)
+	if manifest.Source.Directory != "." || manifest.Source.Agent == "" {
+		t.Fatal("publication must select a source packager even when several compatible agents are installed")
+	}
 	if manifest.Release.Owner != "workflow" || manifest.Release.Workflow != "releaser.yml" {
 		t.Fatal("the tag workflow must be the sole artifact publisher")
 	}
