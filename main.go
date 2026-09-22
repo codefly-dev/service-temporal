@@ -71,8 +71,10 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK,
 				}},
 			},
-			Audit: &agentv0.ValidationOperationCapability{Supported: true},
-			Sbom:  &agentv0.ValidationOperationCapability{Supported: true},
+			Sync:          &agentv0.ValidationOperationCapability{Supported: true, Scopes: []agentv0.ValidationScope{agentv0.ValidationScope_VALIDATION_SCOPE_WORKSPACE}},
+			ArtifactBuild: &agentv0.ValidationOperationCapability{Supported: true, Scopes: []agentv0.ValidationScope{agentv0.ValidationScope_VALIDATION_SCOPE_WORKSPACE}},
+			Audit:         &agentv0.ValidationOperationCapability{Supported: true},
+			Sbom:          &agentv0.ValidationOperationCapability{Supported: true},
 		},
 		Config: []*agentv0.ConfigurationValueDetail{
 			{
